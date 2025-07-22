@@ -401,9 +401,27 @@ class UpsamplerSmartUpscale:
                 temp_file.write(image_response.content)
                 temp_file.close()
                 
-                result_image = Image.open(temp_file.name)
-                print(f"🖼️ [Result] Final image: {result_image.size} ({result_image.mode})")
-                os.unlink(temp_file.name)  # Clean up temp file
+                try:
+                    # Open and load the image into memory
+                    with Image.open(temp_file.name) as img:
+                        result_image = img.copy()  # Create a copy to ensure it's loaded into memory
+                    print(f"🖼️ [Result] Final image: {result_image.size} ({result_image.mode})")
+                    
+                    # Clean up temp file
+                    try:
+                        os.unlink(temp_file.name)
+                        print(f"🧹 [Cleanup] Temporary file deleted successfully")
+                    except PermissionError as e:
+                        print(f"⚠️ [Cleanup] Could not delete temp file (will be cleaned up by OS): {e}")
+                        # Don't raise - the image is loaded, temp file will be cleaned up by OS
+                        
+                except Exception as e:
+                    # If anything goes wrong, try to clean up
+                    try:
+                        os.unlink(temp_file.name)
+                    except:
+                        pass
+                    raise e
                 
                 return result_image
                 
