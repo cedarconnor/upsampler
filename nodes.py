@@ -416,8 +416,8 @@ class UpsamplerSmartUpscale:
                 # Update progress bar
                 progress = min(progress + 5, 95)
                 pbar.update(progress)
-                print(f"⏳ [Waiting] Status: {status}, waiting 5 seconds...")
-                time.sleep(5)  # Wait 5 seconds before next check
+                print(f"⏳ [Waiting] Status: {status}, waiting 60 seconds...")
+                time.sleep(60)  # Wait 60 seconds before next check
             
             else:
                 print(f"❓ [Unknown] Unexpected status: {status}")
