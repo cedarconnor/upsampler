@@ -1,0 +1,45 @@
+{
+  "1": {
+    "inputs": {
+      "image": "example.png",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "api_key": "your_upsampler_api_key_here",
+      "input_image_type": "universal",
+      "upscale_factor": 2.0,
+      "global_creativity": 5,
+      "detail": 7,
+      "description": "High quality, detailed enhancement",
+      "should_enhance_faces": true,
+      "should_preserve_blur": false
+    },
+    "class_type": "Upsampler Smart Upscale",
+    "_meta": {
+      "title": "Upsampler Smart Upscale"
+    }
+  },
+  "3": {
+    "inputs": {
+      "filename_prefix": "upsampled",
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}
