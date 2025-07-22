@@ -25,6 +25,7 @@ class UpsamplerSmartUpscale:
                 "detail": ("INT", {"default": 5, "min": 0, "max": 10}),
             },
             "optional": {
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
@@ -38,14 +39,17 @@ class UpsamplerSmartUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, detail: int,
-                description: str = "", should_enhance_faces: bool = False, 
+                imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Convert ComfyUI image tensor to PIL Image
         pil_image = self._tensor_to_pil(image)
         
-        # Upload image to temporary hosting service or save locally and create accessible URL
-        image_url = self._upload_image_temp(pil_image)
+        # Get ImgBB API key from parameter or environment variable
+        hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
+        
+        # Upload image to temporary hosting service
+        image_url = self._upload_image_temp(pil_image, hosting_api_key)
         
         # Prepare API request
         payload = {
@@ -87,41 +91,149 @@ class UpsamplerSmartUpscale:
             tensor = tensor.unsqueeze(0)
         return tensor
 
-    def _upload_image_temp(self, image: Image.Image) -> str:
+    def _upload_image_temp(self, image: Image.Image, imgbb_api_key: str = None) -> str:
         import base64
         import io
         
-        # Convert image to base64 for temporary hosting services
+        # Convert image to base64
         buffer = io.BytesIO()
         image.save(buffer, format='PNG')
         buffer.seek(0)
+        image_data = base64.b64encode(buffer.getvalue()).decode()
         
-        # Use a temporary image hosting service like ImgBB, Imgur, or implement your own
-        # For this example, we'll use a placeholder that explains what needs to be done
+        # Option 1: ImgBB (Free, requires API key)
+        if imgbb_api_key:
+            return self._upload_to_imgbb(image_data, imgbb_api_key)
         
-        # You need to implement one of these options:
-        # 1. Upload to ImgBB API
-        # 2. Upload to your own server/CDN
-        # 3. Use imgur API
-        # 4. Use any other public image hosting service
+        # Option 2: Try free services without API key
+        try:
+            return self._upload_to_free_service(image_data)
+        except Exception as e:
+            raise Exception(
+                f"Image upload failed: {str(e)}\n\n"
+                "To resolve this, you have several options:\n"
+                "1. Get a free ImgBB API key from https://api.imgbb.com/\n"
+                "2. Add 'imgbb_api_key' parameter to the node input\n"
+                "3. Set IMGBB_API_KEY environment variable\n"
+                "4. Use your own hosting solution\n\n"
+                "ImgBB is recommended as it's free and reliable."
+            )
+
+    def _upload_to_imgbb(self, image_data: str, api_key: str) -> str:
+        """Upload image to ImgBB service"""
+        response = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={
+                "key": api_key,
+                "image": image_data,
+                "expiration": 3600  # 1 hour expiration
+            }
+        )
         
-        # Example implementation for ImgBB (requires API key):
-        # imgbb_api_key = "your_imgbb_api_key"
-        # image_data = base64.b64encode(buffer.getvalue()).decode()
-        # response = requests.post(
-        #     "https://api.imgbb.com/1/upload",
-        #     data={
-        #         "key": imgbb_api_key,
-        #         "image": image_data
-        #     }
-        # )
-        # if response.status_code == 200:
-        #     return response.json()["data"]["url"]
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                return result["data"]["url"]
+            else:
+                raise Exception(f"ImgBB upload failed: {result.get('error', {}).get('message', 'Unknown error')}")
+        else:
+            raise Exception(f"ImgBB API error: {response.status_code} - {response.text}")
+
+    def _upload_to_free_service(self, image_data: str) -> str:
+        """Try uploading to free services that don't require API keys"""
         
+        # Try 0x0.st - a simple file sharing service
+        try:
+            return self._upload_to_0x0st(image_data)
+        except Exception as e1:
+            print(f"0x0.st upload failed: {e1}")
+            
+            # Try imgbb without API key (if they support it)
+            try:
+                return self._upload_to_postimages(image_data)
+            except Exception as e2:
+                print(f"PostImages upload failed: {e2}")
+                
+                raise Exception(
+                    "All free hosting services failed. Please use ImgBB with an API key for reliable hosting."
+                )
+
+    def _upload_to_0x0st(self, image_data: str) -> str:
+        """Upload to 0x0.st file sharing service"""
+        import base64
+        
+        image_bytes = base64.b64decode(image_data)
+        
+        response = requests.post(
+            'https://0x0.st',
+            files={'file': ('image.png', image_bytes, 'image/png')},
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            url = response.text.strip()
+            if url.startswith('https://0x0.st/'):
+                return url
+            else:
+                raise Exception(f"Unexpected response format: {url}")
+        else:
+            raise Exception(f"Upload failed with status {response.status_code}: {response.text}")
+
+    def _upload_to_postimages(self, image_data: str) -> str:
+        """Upload to PostImages service"""
+        import base64
+        
+        image_bytes = base64.b64decode(image_data)
+        
+        response = requests.post(
+            'https://postimages.org/json/rr',
+            files={'upload': ('image.png', image_bytes, 'image/png')},
+            data={
+                'token': '',
+                'upload_session': '',
+                'numfiles': '1',
+                'gallery': '',
+                'ui': 'json'
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if 'url' in result:
+                return result['url']
+            else:
+                raise Exception(f"No URL in response: {result}")
+        else:
+            raise Exception(f"Upload failed with status {response.status_code}")
+    
+    def _create_local_server_url(self, image_data: str) -> str:
+        """
+        Creates a temporary local HTTP server to serve the image.
+        This is a fallback option but may not work in all environments.
+        """
+        import threading
+        import http.server
+        import socketserver
+        import socket
+        from urllib.parse import urljoin
+        
+        # Find an available port
+        sock = socket.socket()
+        sock.bind(('', 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        
+        # Save image temporarily
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        image_bytes = base64.b64decode(image_data)
+        temp_file.write(image_bytes)
+        temp_file.close()
+        
+        # This approach has limitations and is not recommended for production
         raise Exception(
-            "Image hosting not implemented. Please implement _upload_image_temp() method "
-            "to upload images to a publicly accessible URL. You can use services like ImgBB, "
-            "Imgur, or your own hosting solution."
+            "Local server hosting not implemented in this version. "
+            "Please use ImgBB or another cloud hosting service."
         )
 
     def _submit_upscale_job(self, endpoint: str, payload: Dict[str, Any], api_key: str) -> str:
@@ -212,6 +324,7 @@ class UpsamplerDynamicUpscale:
                 "detail": ("INT", {"default": 5, "min": 0, "max": 10}),
             },
             "optional": {
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_hands": ("BOOLEAN", {"default": False}),
@@ -226,13 +339,16 @@ class UpsamplerDynamicUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, resemblance: int, 
-                detail: int, description: str = "", should_enhance_faces: bool = False, 
+                detail: int, imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_hands: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
         pil_image = upscaler._tensor_to_pil(image)
-        image_url = upscaler._upload_image_temp(pil_image)
+        
+        # Get ImgBB API key from parameter or environment variable
+        hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
         
         payload = {
             "input": {
@@ -266,6 +382,7 @@ class UpsamplerPreciseUpscale:
                 "upscale_factor": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 16.0, "step": 0.1}),
             },
             "optional": {
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
@@ -277,13 +394,16 @@ class UpsamplerPreciseUpscale:
     CATEGORY = "Upsampler"
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
-                upscale_factor: float, should_enhance_faces: bool = False, 
+                upscale_factor: float, imgbb_api_key: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
         pil_image = upscaler._tensor_to_pil(image)
-        image_url = upscaler._upload_image_temp(pil_image)
+        
+        # Get ImgBB API key from parameter or environment variable
+        hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
         
         payload = {
             "input": {

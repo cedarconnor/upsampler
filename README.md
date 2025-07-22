@@ -33,21 +33,37 @@ Three different upscaling methods:
 2. Create an account and generate an API key
 3. Add credits to your account for processing
 
-### 2. Implement Image Hosting
+### 2. Image Hosting Setup
 
-**IMPORTANT**: Before using these nodes, you must implement the `_upload_image_temp()` method in `nodes.py` to upload images to a publicly accessible URL.
+The Upsampler API requires images to be accessible via public URLs. The nodes now include **automatic image hosting** with multiple options:
 
-The Upsampler API requires images to be accessible via public URLs. You have several options:
+#### Option A: ImgBB (Recommended - Free & Reliable)
 
-#### Option A: Use ImgBB (Recommended)
-1. Get a free API key from https://api.imgbb.com/
-2. Uncomment and modify the ImgBB implementation in `_upload_image_temp()`
+1. **Get a free API key**:
+   - Visit https://api.imgbb.com/
+   - Sign up and generate an API key
+   - Free tier: Up to 100 images/day
 
-#### Option B: Use Your Own Server
-Upload images to your own web server or CDN that provides public URLs.
+2. **Configure the API key** (choose one method):
+   
+   **Method 1: Node Parameter**
+   - Add your ImgBB API key to the "imgbb_api_key" field in each node
+   
+   **Method 2: Environment Variable**
+   - Set environment variable: `IMGBB_API_KEY=your_api_key_here`
+   - Windows: `set IMGBB_API_KEY=your_api_key_here`
+   - Linux/Mac: `export IMGBB_API_KEY=your_api_key_here`
 
-#### Option C: Use Other Services
-Implement integration with services like Imgur, Cloudinary, or AWS S3.
+#### Option B: Free Services (Automatic Fallback)
+
+If no ImgBB API key is provided, the nodes will automatically try:
+- **0x0.st**: Simple file sharing service
+- **PostImages**: Image hosting service
+
+**Note**: Free services may be less reliable and have usage limits.
+
+#### Option C: Your Own Server
+For production use, implement your own hosting solution by modifying the `_upload_image_temp()` method in `nodes.py`.
 
 ## Usage
 
@@ -60,6 +76,7 @@ Implement integration with services like Imgur, Cloudinary, or AWS S3.
 
 3. Configure the parameters:
    - **API Key**: Your Upsampler API key
+   - **ImgBB API Key** (optional): Your ImgBB API key for reliable image hosting
    - **Input Image Type**: Choose "realism", "anime", or "universal"
    - **Upscale Factor**: How much to upscale (1.0-4.0 for Smart/Dynamic, 1.0-16.0 for Precise)
    - Additional parameters specific to each method
@@ -73,6 +90,7 @@ Implement integration with services like Imgur, Cloudinary, or AWS S3.
 ## Node Parameters
 
 ### Smart Upscale
+- `imgbb_api_key`: ImgBB API key for reliable image hosting (optional)
 - `global_creativity` (0-10): How much the AI can change the original image
 - `detail` (0-10): Level of detail enhancement
 - `description`: Text prompt to guide the upscaling process
@@ -80,6 +98,7 @@ Implement integration with services like Imgur, Cloudinary, or AWS S3.
 - `should_preserve_blur`: Preserve existing blur in the image
 
 ### Dynamic Upscale  
+- `imgbb_api_key`: ImgBB API key for reliable image hosting (optional)
 - `global_creativity` (0-10): How much the AI can change the original image
 - `resemblance` (0-10): How closely to adhere to original image structure
 - `detail` (0-10): Level of detail enhancement
@@ -89,6 +108,7 @@ Implement integration with services like Imgur, Cloudinary, or AWS S3.
 - `should_preserve_blur`: Preserve existing blur in the image
 
 ### Precise Upscale
+- `imgbb_api_key`: ImgBB API key for reliable image hosting (optional)
 - `should_enhance_faces`: Apply face restoration techniques
 - `should_preserve_blur`: Preserve existing blur in the image
 
@@ -100,10 +120,28 @@ Credits are consumed based on output image size:
 
 ## Troubleshooting
 
-1. **"Image hosting not implemented" error**: You need to implement the `_upload_image_temp()` method
-2. **API authentication errors**: Check your API key is correct and has credits
-3. **Rate limit errors**: The API has limits of 60 requests/minute and 1800 requests/hour
-4. **Job failures**: Check the error message - common issues include invalid parameters or insufficient credits
+1. **Image upload errors**: 
+   - Get an ImgBB API key for reliable hosting
+   - Check your internet connection
+   - Try again if free services are temporarily unavailable
+
+2. **"All free hosting services failed"**: 
+   - Use ImgBB with an API key (recommended)
+   - Set the `IMGBB_API_KEY` environment variable
+   - Or add the key to the node parameter
+
+3. **API authentication errors**: 
+   - Check your Upsampler API key is correct and has credits
+   - Verify account status at https://upsampler.com/
+
+4. **Rate limit errors**: 
+   - The API has limits of 60 requests/minute and 1800 requests/hour
+   - Wait before retrying
+
+5. **Job failures**: 
+   - Check the error message for specific issues
+   - Common issues: invalid parameters or insufficient credits
+   - Verify image format and size constraints
 
 ## API Documentation
 
