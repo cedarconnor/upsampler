@@ -172,10 +172,13 @@ class UpsamplerSmartUpscale:
         
         print(f"📊 [Upload] Image size: {image_size_mb:.2f} MB")
         
-        # Check size limit
-        if image_size_mb > 32:
+        # Check size limits and provide guidance
+        if image_size_mb > 200:
+            print(f"⚠️ [Upload] Warning: Image is {image_size_mb:.2f} MB, exceeding all free service limits")
+            print(f"💡 [Upload] Consider compressing the image significantly")
+        elif image_size_mb > 32:
             print(f"⚠️ [Upload] Warning: Image is {image_size_mb:.2f} MB, exceeding ImgBB's 32MB limit")
-            print(f"💡 [Upload] Consider compressing the image or using a different hosting service")
+            print(f"💡 [Upload] Will try Catbox.moe (200MB limit) if ImgBB fails")
         
         # Use ImgBB if API key provided
         if imgbb_api_key:
@@ -188,11 +191,12 @@ class UpsamplerSmartUpscale:
             raise Exception(
                 f"Image upload failed: {str(e)}\n\n"
                 "To resolve this, you have several options:\n"
-                "1. Get a free ImgBB API key from https://api.imgbb.com/\n"
+                "1. Get a free ImgBB API key from https://api.imgbb.com/ (32MB limit)\n"
                 "2. Add 'imgbb_api_key' parameter to the node input\n"
                 "3. Set IMGBB_API_KEY environment variable\n"
-                "4. Compress your image to under 32MB\n\n"
-                "ImgBB is recommended as it's free and reliable."
+                "4. Compress your image (under 32MB for ImgBB, under 200MB for free services)\n\n"
+                "Free services tried: Catbox.moe (200MB), 0x0.st, PostImages\n"
+                "ImgBB with API key is most reliable for consistent uploads."
             )
 
     def _upload_to_imgbb(self, image_data: str, api_key: str) -> str:
@@ -224,24 +228,66 @@ class UpsamplerSmartUpscale:
             print(f"❌ [ImgBB] API error: {response.status_code} - {response.text}")
             raise Exception(f"ImgBB API error: {response.status_code} - {response.text}")
 
+    def _upload_to_catbox(self, image_data: str) -> str:
+        """Upload to Catbox.moe file sharing service (200MB limit, no API key needed)"""
+        import base64
+        
+        print(f"🔄 [Catbox] Uploading to Catbox.moe (200MB limit, no expiration)...")
+        
+        image_bytes = base64.b64decode(image_data)
+        
+        # Catbox.moe API endpoint
+        response = requests.post(
+            'https://catbox.moe/user/api.php',
+            data={
+                'reqtype': 'fileupload'
+            },
+            files={
+                'fileToUpload': ('image.png', image_bytes, 'image/png')
+            },
+            timeout=60  # Longer timeout for large files
+        )
+        
+        print(f"📡 [Catbox] Response status: {response.status_code}")
+        
+        if response.status_code == 200:
+            url = response.text.strip()
+            # Catbox returns just the URL on success
+            if url.startswith('https://files.catbox.moe/'):
+                print(f"✅ [Catbox] Upload successful: {url}")
+                return url
+            else:
+                # If it's an error message, it won't start with https://
+                print(f"❌ [Catbox] Upload failed: {url}")
+                raise Exception(f"Catbox upload failed: {url}")
+        else:
+            print(f"❌ [Catbox] HTTP error: {response.status_code} - {response.text}")
+            raise Exception(f"Catbox upload failed with status {response.status_code}: {response.text}")
+
     def _upload_to_free_service(self, image_data: str) -> str:
         """Try uploading to free services that don't require API keys"""
         
-        # Try 0x0.st - a simple file sharing service
+        # Try Catbox.moe first - has 200MB limit, no API key needed
         try:
-            return self._upload_to_0x0st(image_data)
+            return self._upload_to_catbox(image_data)
         except Exception as e1:
-            print(f"0x0.st upload failed: {e1}")
+            print(f"Catbox.moe upload failed: {e1}")
             
-            # Try imgbb without API key (if they support it)
+            # Try 0x0.st - a simple file sharing service
             try:
-                return self._upload_to_postimages(image_data)
+                return self._upload_to_0x0st(image_data)
             except Exception as e2:
-                print(f"PostImages upload failed: {e2}")
+                print(f"0x0.st upload failed: {e2}")
                 
-                raise Exception(
-                    "All free hosting services failed. Please use ImgBB with an API key for reliable hosting."
-                )
+                # Try PostImages as last resort
+                try:
+                    return self._upload_to_postimages(image_data)
+                except Exception as e3:
+                    print(f"PostImages upload failed: {e3}")
+                    
+                    raise Exception(
+                        "All free hosting services failed. Please use ImgBB with an API key for reliable hosting."
+                    )
 
     def _upload_to_0x0st(self, image_data: str) -> str:
         """Upload to 0x0.st file sharing service"""

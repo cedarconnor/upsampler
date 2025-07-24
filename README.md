@@ -37,12 +37,12 @@ Three different upscaling methods:
 
 The Upsampler API requires images to be accessible via public URLs. The nodes now include **automatic image hosting** with multiple options:
 
-#### Option A: ImgBB (Recommended - Free & Reliable)
+#### Option A: ImgBB (Recommended - Free & Reliable, up to 32MB)
 
 1. **Get a free API key**:
    - Visit https://api.imgbb.com/
    - Sign up and generate an API key
-   - Free tier: Up to 100 images/day
+   - Free tier: Up to 100 images/day, 32MB per image
 
 2. **Configure the API key** (choose one method):
    
@@ -54,11 +54,14 @@ The Upsampler API requires images to be accessible via public URLs. The nodes no
    - Windows: `set IMGBB_API_KEY=your_api_key_here`
    - Linux/Mac: `export IMGBB_API_KEY=your_api_key_here`
 
-#### Option B: Free Services (Automatic Fallback)
+#### Option B: Free Services (Automatic Fallback, larger files supported)
 
 If no ImgBB API key is provided, the nodes will automatically try:
+- **Catbox.moe**: Up to 200MB, no API key needed, permanent storage
 - **0x0.st**: Simple file sharing service
 - **PostImages**: Image hosting service
+
+**Perfect for large images (32MB-200MB) without needing any API keys!**
 
 **Note**: Free services may be less reliable and have usage limits.
 
