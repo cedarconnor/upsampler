@@ -280,11 +280,33 @@ class UpsamplerSmartUpscale:
         if not creds_path:
             creds_path = os.getenv('GOOGLE_DRIVE_CREDS_PATH', '')
         
-        if not creds_path or not os.path.exists(creds_path):
+        if not creds_path:
+            raise Exception(
+                "Google Drive credentials path not provided.\n"
+                "Please provide the path to your service account JSON file in the 'google_drive_creds_path' parameter.\n"
+                "Example: C:\\path\\to\\your\\google-service-account.json"
+            )
+        
+        # Check if path exists and is a file
+        if not os.path.exists(creds_path):
             raise Exception(
                 f"Google Drive credentials file not found at: {creds_path}\n"
-                "Please provide a valid service account JSON file path.\n"
-                "See: https://developers.google.com/drive/api/v3/quickstart/python"
+                "Please check the file path and ensure the JSON file exists.\n"
+                "Example: C:\\ComfyUI\\credentials\\google-service-account.json"
+            )
+        
+        if os.path.isdir(creds_path):
+            raise Exception(
+                f"The path '{creds_path}' is a directory, not a file.\n"
+                "Please provide the full path to your JSON credentials file.\n"
+                "Example: {creds_path}\\google-service-account.json"
+            )
+        
+        if not creds_path.endswith('.json'):
+            raise Exception(
+                f"The credentials file must be a JSON file: {creds_path}\n"
+                "Please ensure you're pointing to the service account JSON file.\n"
+                "Example: google-service-account.json"
             )
         
         print(f"🔄 [Google Drive] Authenticating with credentials: {creds_path}")
@@ -360,8 +382,31 @@ class UpsamplerSmartUpscale:
             except:
                 pass
             
-            print(f"❌ [Google Drive] Upload failed: {str(e)}")
-            raise Exception(f"Google Drive upload failed: {str(e)}")
+            error_msg = str(e)
+            print(f"❌ [Google Drive] Upload failed: {error_msg}")
+            
+            # Provide more specific error messages
+            if "Permission denied" in error_msg:
+                raise Exception(
+                    f"Google Drive upload failed - Permission denied.\n"
+                    f"This usually means:\n"
+                    f"1. The credentials file path is incorrect: {creds_path}\n"
+                    f"2. The file doesn't have proper read permissions\n"
+                    f"3. You provided a directory path instead of a file path\n\n"
+                    f"Please check that the file exists and is readable."
+                )
+            elif "No such file or directory" in error_msg:
+                raise Exception(
+                    f"Google Drive credentials file not found: {creds_path}\n"
+                    f"Please check the file path and ensure the JSON file exists."
+                )
+            elif "not a valid service account" in error_msg:
+                raise Exception(
+                    f"Invalid service account credentials file: {creds_path}\n"
+                    f"Please ensure you downloaded the correct JSON file from Google Cloud Console."
+                )
+            else:
+                raise Exception(f"Google Drive upload failed: {error_msg}")
 
     def _upload_to_free_service(self, image_data: str) -> str:
         """Try uploading to free services that don't require API keys"""

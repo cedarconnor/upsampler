@@ -111,4 +111,6 @@ Once you've completed the setup, your node will have these new fields:
 - `google_drive_folder_id`: `1ABC123DEF456GHI789JKL` (optional)
 - `upload_method`: `auto` (recommended)
 
+**Important:** Make sure to provide the FULL PATH to the JSON file, not just the directory!
+
 With these settings, large images will automatically upload to your specified Google Drive folder, bypassing the 32MB ImgBB limit!
