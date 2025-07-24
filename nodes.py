@@ -2,7 +2,6 @@ import os
 import requests
 import time
 import tempfile
-import json
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urlparse
 from PIL import Image
@@ -17,8 +16,24 @@ try:
     from googleapiclient.http import MediaIoBaseUpload
     from google.oauth2.service_account import Credentials
     GOOGLE_DRIVE_AVAILABLE = True
-except ImportError:
+    print("✅ [Upsampler] Google Drive integration available")
+except ImportError as e:
     GOOGLE_DRIVE_AVAILABLE = False
+    print(f"⚠️ [Upsampler] Google Drive integration disabled: {e}")
+    print("   Install with: pip install google-api-python-client google-auth")
+    
+    # Create dummy classes to prevent import errors
+    class Credentials:
+        @staticmethod
+        def from_service_account_file(*args, **kwargs):
+            raise ImportError("Google API libraries not installed")
+    
+    def build(*args, **kwargs):
+        raise ImportError("Google API libraries not installed")
+    
+    class MediaIoBaseUpload:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("Google API libraries not installed")
 
 
 class UpsamplerSmartUpscale:
