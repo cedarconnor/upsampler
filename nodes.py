@@ -309,6 +309,49 @@ class UpsamplerSmartUpscale:
                 "Example: google-service-account.json"
             )
         
+        # Validate the JSON file format
+        try:
+            import json
+            with open(creds_path, 'r') as f:
+                creds_data = json.load(f)
+            
+            # Check for required service account fields
+            required_fields = ['type', 'client_email', 'private_key', 'token_uri']
+            missing_fields = [field for field in required_fields if field not in creds_data]
+            
+            if missing_fields:
+                raise Exception(
+                    f"Invalid service account credentials file: {creds_path}\n"
+                    f"Missing required fields: {', '.join(missing_fields)}\n\n"
+                    f"This file doesn't appear to be a Google Cloud service account JSON file.\n\n"
+                    f"Make sure you:\n"
+                    f"1. Downloaded the JSON file from Google Cloud Console\n"
+                    f"2. Selected 'Service Account' (not OAuth or API key)\n"
+                    f"3. Generated a new key in JSON format\n\n"
+                    f"The file should contain fields like 'client_email', 'private_key', etc."
+                )
+            
+            if creds_data.get('type') != 'service_account':
+                raise Exception(
+                    f"Invalid credentials type in {creds_path}\n"
+                    f"Expected 'service_account', got '{creds_data.get('type', 'unknown')}'\n\n"
+                    f"Please make sure you downloaded a Service Account JSON file,\n"
+                    f"not an OAuth client credentials or API key file."
+                )
+                
+        except json.JSONDecodeError as e:
+            raise Exception(
+                f"Invalid JSON format in credentials file: {creds_path}\n"
+                f"JSON error: {str(e)}\n\n"
+                f"Please check that the file is valid JSON and not corrupted."
+            )
+        except FileNotFoundError:
+            raise Exception(f"Credentials file not found: {creds_path}")
+        except Exception as e:
+            if "Missing required fields" in str(e):
+                raise  # Re-raise our custom error
+            raise Exception(f"Error reading credentials file: {str(e)}")
+        
         print(f"🔄 [Google Drive] Authenticating with credentials: {creds_path}")
         
         # Use folder ID from parameter first, then environment variable

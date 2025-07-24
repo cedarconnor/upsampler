@@ -28,9 +28,27 @@ pip install google-api-python-client google-auth
 1. Click on your created service account
 2. Go to "Keys" tab
 3. Click "Add Key" > "Create new key"
-4. Select "JSON" format
-5. Download the JSON file
-6. Save it securely (e.g., `~/google-drive-creds.json`)
+4. **IMPORTANT**: Select "JSON" format (not P12)
+5. Click "Create" - this will download a JSON file
+6. Save it securely (e.g., `C:\ComfyUI\credentials\google-drive-creds.json`)
+
+**What the downloaded file should look like:**
+```json
+{
+  "type": "service_account",
+  "project_id": "your-project-id",
+  "private_key_id": "...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n...",
+  "client_email": "service-account-name@project-id.iam.gserviceaccount.com",
+  "client_id": "...",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "..."
+}
+```
+
+**⚠️ IMPORTANT**: Make sure you download a "Service Account" JSON file, not an "OAuth client" or "API key" file!
 
 ### 4. Configure the Node
 
@@ -97,6 +115,24 @@ To upload to a specific Google Drive folder:
 
 ### "Module not found"
 - Install required packages: `pip install google-api-python-client google-auth`
+
+### "Service account info was not in the expected format"
+This error means you're using the wrong type of credentials file:
+
+**Problem**: You downloaded an OAuth client credentials or API key file instead of a service account file.
+
+**Solution**:
+1. Go back to Google Cloud Console
+2. Navigate to "IAM & Admin" > "Service Accounts" (not "Credentials")
+3. Click on your service account name
+4. Go to "Keys" tab
+5. Create a new JSON key
+6. Make sure the downloaded file has `"type": "service_account"` in it
+
+**Wrong file types to avoid**:
+- OAuth 2.0 client credentials (`"type": "web"` or `"type": "installed"`)
+- API keys (just a string, not JSON)
+- Application default credentials
 
 ## Quick Setup Summary
 
