@@ -83,11 +83,19 @@ export GOOGLE_DRIVE_FOLDER_ID="your_folder_id"  # Optional - can also be set in 
 To upload to a specific Google Drive folder:
 
 ### Method 1: Using Node Parameter (Easier)
-1. Create or navigate to the desired folder in Google Drive
-2. Copy the folder ID from the URL (the long string after `/folders/`)
+1. **Create or navigate to the desired folder** in Google Drive
+2. **Share the folder with your service account**:
+   - Right-click the folder → "Share"
+   - Add your service account email (from your JSON file's `client_email` field)
+   - Example: `upsampler-bot@comfyui-upsampler.iam.gserviceaccount.com`
+   - Set permission to "Editor"
+   - Click "Send"
+3. **Copy the folder ID** from the URL:
    - Example URL: `https://drive.google.com/drive/folders/1ABC123DEF456GHI789JKL`
    - Folder ID: `1ABC123DEF456GHI789JKL`
-3. Paste this ID into the `google_drive_folder_id` field in the node
+4. **Paste this ID** into the `google_drive_folder_id` field in the node
+
+**⚠️ IMPORTANT**: The service account must have access to the folder, or you'll get a "File not found" error!
 
 ### Method 2: Using Environment Variable
 1. Follow steps 1-2 above to get the folder ID

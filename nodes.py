@@ -448,6 +448,19 @@ class UpsamplerSmartUpscale:
                     f"Invalid service account credentials file: {creds_path}\n"
                     f"Please ensure you downloaded the correct JSON file from Google Cloud Console."
                 )
+            elif "File not found" in error_msg:
+                folder_info = f" (folder ID: {folder_id})" if folder_id else ""
+                raise Exception(
+                    f"Google Drive folder not found or not accessible{folder_info}.\n\n"
+                    f"This usually means:\n"
+                    f"1. The folder ID is incorrect or the folder was deleted\n"
+                    f"2. The service account doesn't have access to the folder\n\n"
+                    f"Solutions:\n"
+                    f"- Leave 'google_drive_folder_id' empty to upload to root directory\n"
+                    f"- Or create a new folder and share it with your service account email\n"
+                    f"  (found in your JSON credentials file as 'client_email')\n"
+                    f"- Then copy the folder ID from the Google Drive URL"
+                )
             else:
                 raise Exception(f"Google Drive upload failed: {error_msg}")
 
