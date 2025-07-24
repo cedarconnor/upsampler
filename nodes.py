@@ -11,30 +11,6 @@ import numpy as np
 import folder_paths
 from comfy.utils import ProgressBar
 
-try:
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
-    from google.oauth2.service_account import Credentials
-    GOOGLE_DRIVE_AVAILABLE = True
-    print("✅ [Upsampler] Google Drive integration available")
-except ImportError as e:
-    GOOGLE_DRIVE_AVAILABLE = False
-    print(f"⚠️ [Upsampler] Google Drive integration disabled: {e}")
-    print("   Install with: pip install google-api-python-client google-auth")
-    
-    # Create dummy classes to prevent import errors
-    class Credentials:
-        @staticmethod
-        def from_service_account_file(*args, **kwargs):
-            raise ImportError("Google API libraries not installed")
-    
-    def build(*args, **kwargs):
-        raise ImportError("Google API libraries not installed")
-    
-    class MediaIoBaseUpload:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("Google API libraries not installed")
-
 
 class UpsamplerSmartUpscale:
     @classmethod
@@ -50,9 +26,6 @@ class UpsamplerSmartUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
-                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"}),
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
@@ -66,8 +39,7 @@ class UpsamplerSmartUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, detail: int,
-                imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto",
-                description: str = "", should_enhance_faces: bool = False, 
+                imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         print(f"🚀 [Upsampler] Starting Smart Upscale process...")
@@ -84,7 +56,7 @@ class UpsamplerSmartUpscale:
         
         # Upload image to hosting service
         print(f"📤 [Upsampler] Uploading image to hosting service...")
-        image_url = self._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
+        image_url = self._upload_image_temp(pil_image, hosting_api_key)
         print(f"✅ [Upsampler] Image uploaded successfully: {image_url}")
         
         # Prepare API request
@@ -187,12 +159,11 @@ class UpsamplerSmartUpscale:
             
         return tensor
 
-    def _upload_image_temp(self, image: Image.Image, imgbb_api_key: str = None, 
-                          google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto") -> str:
+    def _upload_image_temp(self, image: Image.Image, imgbb_api_key: str = None) -> str:
         import base64
         import io
         
-        # Convert image to base64 for compatibility
+        # Convert image to base64
         buffer = io.BytesIO()
         image.save(buffer, format='PNG')
         buffer.seek(0)
@@ -201,50 +172,16 @@ class UpsamplerSmartUpscale:
         
         print(f"📊 [Upload] Image size: {image_size_mb:.2f} MB")
         
-        # Determine upload method
-        if upload_method == "google_drive":
-            return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
-        elif upload_method == "imgbb":
-            if not imgbb_api_key:
-                raise Exception("ImgBB API key required for ImgBB upload method")
-            return self._upload_to_imgbb(image_data, imgbb_api_key)
-        elif upload_method == "auto":
-            # Auto-select based on image size and available credentials
-            if image_size_mb > 30:  # Close to ImgBB limit
-                print(f"🔄 [Upload] Large image detected ({image_size_mb:.2f} MB), preferring Google Drive...")
-                if google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
-                    try:
-                        return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
-                    except Exception as e:
-                        if "Service Accounts do not have storage quota" in str(e) or "storageQuotaExceeded" in str(e):
-                            print(f"⚠️ [Upload] Google Drive service account quota exceeded, falling back to ImgBB...")
-                            if imgbb_api_key:
-                                print(f"⚠️ [Upload] Warning: Image is {image_size_mb:.2f} MB, close to ImgBB 32MB limit")
-                                return self._upload_to_imgbb(image_data, imgbb_api_key)
-                            else:
-                                raise Exception(f"Google Drive failed and no ImgBB API key provided. Large image ({image_size_mb:.2f} MB) needs ImgBB API key or working Google Drive.")
-                        else:
-                            raise  # Re-raise other Google Drive errors
-                elif imgbb_api_key:
-                    print(f"⚠️ [Upload] Image is close to ImgBB 32MB limit, but no Google Drive credentials available")
-                    return self._upload_to_imgbb(image_data, imgbb_api_key)
-                else:
-                    raise Exception(f"Image too large ({image_size_mb:.2f} MB) for free services. Please use Google Drive or ImgBB.")
-            else:
-                # Try ImgBB first for smaller images
-                if imgbb_api_key:
-                    return self._upload_to_imgbb(image_data, imgbb_api_key)
-                elif google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
-                    try:
-                        return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
-                    except Exception as e:
-                        if "Service Accounts do not have storage quota" in str(e) or "storageQuotaExceeded" in str(e):
-                            print(f"⚠️ [Upload] Google Drive service account quota exceeded, falling back to free services...")
-                            return self._upload_to_free_service(image_data)
-                        else:
-                            raise  # Re-raise other Google Drive errors
+        # Check size limit
+        if image_size_mb > 32:
+            print(f"⚠️ [Upload] Warning: Image is {image_size_mb:.2f} MB, exceeding ImgBB's 32MB limit")
+            print(f"💡 [Upload] Consider compressing the image or using a different hosting service")
         
-        # Fallback to free services
+        # Use ImgBB if API key provided
+        if imgbb_api_key:
+            return self._upload_to_imgbb(image_data, imgbb_api_key)
+        
+        # Try free services without API key
         try:
             return self._upload_to_free_service(image_data)
         except Exception as e:
@@ -252,10 +189,10 @@ class UpsamplerSmartUpscale:
                 f"Image upload failed: {str(e)}\n\n"
                 "To resolve this, you have several options:\n"
                 "1. Get a free ImgBB API key from https://api.imgbb.com/\n"
-                "2. Set up Google Drive API credentials\n"
-                "3. Add 'imgbb_api_key' or 'google_drive_creds_path' parameter\n"
-                "4. Set IMGBB_API_KEY environment variable\n\n"
-                "For large images (>30MB), Google Drive is recommended."
+                "2. Add 'imgbb_api_key' parameter to the node input\n"
+                "3. Set IMGBB_API_KEY environment variable\n"
+                "4. Compress your image to under 32MB\n\n"
+                "ImgBB is recommended as it's free and reliable."
             )
 
     def _upload_to_imgbb(self, image_data: str, api_key: str) -> str:
@@ -286,211 +223,6 @@ class UpsamplerSmartUpscale:
         else:
             print(f"❌ [ImgBB] API error: {response.status_code} - {response.text}")
             raise Exception(f"ImgBB API error: {response.status_code} - {response.text}")
-
-    def _upload_to_google_drive(self, image: Image.Image, creds_path: str, folder_id: str = "") -> str:
-        """Upload image to Google Drive and return public URL"""
-        if not GOOGLE_DRIVE_AVAILABLE:
-            raise Exception(
-                "Google Drive upload requires google-api-python-client and google-auth libraries.\n"
-                "Install with: pip install google-api-python-client google-auth"
-            )
-        
-        if not creds_path:
-            creds_path = os.getenv('GOOGLE_DRIVE_CREDS_PATH', '')
-        
-        if not creds_path:
-            raise Exception(
-                "Google Drive credentials path not provided.\n"
-                "Please provide the path to your service account JSON file in the 'google_drive_creds_path' parameter.\n"
-                "Example: C:\\path\\to\\your\\google-service-account.json"
-            )
-        
-        # Check if path exists and is a file
-        if not os.path.exists(creds_path):
-            raise Exception(
-                f"Google Drive credentials file not found at: {creds_path}\n"
-                "Please check the file path and ensure the JSON file exists.\n"
-                "Example: C:\\ComfyUI\\credentials\\google-service-account.json"
-            )
-        
-        if os.path.isdir(creds_path):
-            raise Exception(
-                f"The path '{creds_path}' is a directory, not a file.\n"
-                "Please provide the full path to your JSON credentials file.\n"
-                "Example: {creds_path}\\google-service-account.json"
-            )
-        
-        if not creds_path.endswith('.json'):
-            raise Exception(
-                f"The credentials file must be a JSON file: {creds_path}\n"
-                "Please ensure you're pointing to the service account JSON file.\n"
-                "Example: google-service-account.json"
-            )
-        
-        # Validate the JSON file format
-        try:
-            import json
-            with open(creds_path, 'r') as f:
-                creds_data = json.load(f)
-            
-            # Check for required service account fields
-            required_fields = ['type', 'client_email', 'private_key', 'token_uri']
-            missing_fields = [field for field in required_fields if field not in creds_data]
-            
-            if missing_fields:
-                raise Exception(
-                    f"Invalid service account credentials file: {creds_path}\n"
-                    f"Missing required fields: {', '.join(missing_fields)}\n\n"
-                    f"This file doesn't appear to be a Google Cloud service account JSON file.\n\n"
-                    f"Make sure you:\n"
-                    f"1. Downloaded the JSON file from Google Cloud Console\n"
-                    f"2. Selected 'Service Account' (not OAuth or API key)\n"
-                    f"3. Generated a new key in JSON format\n\n"
-                    f"The file should contain fields like 'client_email', 'private_key', etc."
-                )
-            
-            if creds_data.get('type') != 'service_account':
-                raise Exception(
-                    f"Invalid credentials type in {creds_path}\n"
-                    f"Expected 'service_account', got '{creds_data.get('type', 'unknown')}'\n\n"
-                    f"Please make sure you downloaded a Service Account JSON file,\n"
-                    f"not an OAuth client credentials or API key file."
-                )
-                
-        except json.JSONDecodeError as e:
-            raise Exception(
-                f"Invalid JSON format in credentials file: {creds_path}\n"
-                f"JSON error: {str(e)}\n\n"
-                f"Please check that the file is valid JSON and not corrupted."
-            )
-        except FileNotFoundError:
-            raise Exception(f"Credentials file not found: {creds_path}")
-        except Exception as e:
-            if "Missing required fields" in str(e):
-                raise  # Re-raise our custom error
-            raise Exception(f"Error reading credentials file: {str(e)}")
-        
-        print(f"🔄 [Google Drive] Authenticating with credentials: {creds_path}")
-        
-        # Use folder ID from parameter first, then environment variable
-        if not folder_id:
-            folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '')
-        
-        if folder_id:
-            print(f"📁 [Google Drive] Using folder ID: {folder_id}")
-        else:
-            print(f"📁 [Google Drive] No folder specified, uploading to root directory")
-        
-        try:
-            # Load service account credentials
-            creds = Credentials.from_service_account_file(
-                creds_path, 
-                scopes=['https://www.googleapis.com/auth/drive.file']
-            )
-            service = build('drive', 'v3', credentials=creds)
-            
-            # Save image to temp file
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            image.save(temp_file.name, format='PNG')
-            temp_file.close()
-            
-            # Upload file to Google Drive
-            file_metadata = {
-                'name': f'upsampler_temp_{int(time.time())}.png'
-            }
-            
-            # Add folder as parent if specified
-            if folder_id:
-                file_metadata['parents'] = [folder_id]
-            
-            print(f"🔄 [Google Drive] Uploading image...")
-            
-            with open(temp_file.name, 'rb') as f:
-                media = MediaIoBaseUpload(f, mimetype='image/png', resumable=True)
-                file = service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields='id'
-                ).execute()
-            
-            file_id = file.get('id')
-            print(f"✅ [Google Drive] File uploaded with ID: {file_id}")
-            
-            # Make file publicly viewable
-            permission = {
-                'type': 'anyone',
-                'role': 'reader'
-            }
-            service.permissions().create(fileId=file_id, body=permission).execute()
-            print(f"✅ [Google Drive] File made publicly accessible")
-            
-            # Clean up temp file
-            try:
-                os.unlink(temp_file.name)
-            except:
-                pass
-            
-            # Return direct download URL
-            public_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-            print(f"✅ [Google Drive] Public URL: {public_url}")
-            
-            return public_url
-            
-        except Exception as e:
-            # Clean up temp file on error
-            try:
-                os.unlink(temp_file.name)
-            except:
-                pass
-            
-            error_msg = str(e)
-            print(f"❌ [Google Drive] Upload failed: {error_msg}")
-            
-            # Provide more specific error messages
-            if "Permission denied" in error_msg:
-                raise Exception(
-                    f"Google Drive upload failed - Permission denied.\n"
-                    f"This usually means:\n"
-                    f"1. The credentials file path is incorrect: {creds_path}\n"
-                    f"2. The file doesn't have proper read permissions\n"
-                    f"3. You provided a directory path instead of a file path\n\n"
-                    f"Please check that the file exists and is readable."
-                )
-            elif "No such file or directory" in error_msg:
-                raise Exception(
-                    f"Google Drive credentials file not found: {creds_path}\n"
-                    f"Please check the file path and ensure the JSON file exists."
-                )
-            elif "not a valid service account" in error_msg:
-                raise Exception(
-                    f"Invalid service account credentials file: {creds_path}\n"
-                    f"Please ensure you downloaded the correct JSON file from Google Cloud Console."
-                )
-            elif "File not found" in error_msg:
-                folder_info = f" (folder ID: {folder_id})" if folder_id else ""
-                raise Exception(
-                    f"Google Drive folder not found or not accessible{folder_info}.\n\n"
-                    f"This usually means:\n"
-                    f"1. The folder ID is incorrect or the folder was deleted\n"
-                    f"2. The service account doesn't have access to the folder\n\n"
-                    f"Solutions:\n"
-                    f"- Leave 'google_drive_folder_id' empty to upload to root directory\n"
-                    f"- Or create a new folder and share it with your service account email\n"
-                    f"  (found in your JSON credentials file as 'client_email')\n"
-                    f"- Then copy the folder ID from the Google Drive URL"
-                )
-            elif "Service Accounts do not have storage quota" in error_msg or "storageQuotaExceeded" in error_msg:
-                raise Exception(
-                    f"Google Drive service account storage quota exceeded.\n\n"
-                    f"Google no longer allows service accounts to upload to personal Drive accounts.\n\n"
-                    f"Solutions:\n"
-                    f"1. Use ImgBB instead: Set upload_method to 'imgbb' and add your ImgBB API key\n"
-                    f"2. Get ImgBB API key free at: https://api.imgbb.com/\n"
-                    f"3. Use Google Workspace with Shared Drives (paid)\n"
-                    f"4. Switch to 'auto' mode to fallback to ImgBB automatically"
-                )
-            else:
-                raise Exception(f"Google Drive upload failed: {error_msg}")
 
     def _upload_to_free_service(self, image_data: str) -> str:
         """Try uploading to free services that don't require API keys"""
@@ -559,35 +291,6 @@ class UpsamplerSmartUpscale:
                 raise Exception(f"No URL in response: {result}")
         else:
             raise Exception(f"Upload failed with status {response.status_code}")
-    
-    def _create_local_server_url(self, image_data: str) -> str:
-        """
-        Creates a temporary local HTTP server to serve the image.
-        This is a fallback option but may not work in all environments.
-        """
-        import threading
-        import http.server
-        import socketserver
-        import socket
-        from urllib.parse import urljoin
-        
-        # Find an available port
-        sock = socket.socket()
-        sock.bind(('', 0))
-        port = sock.getsockname()[1]
-        sock.close()
-        
-        # Save image temporarily
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-        image_bytes = base64.b64decode(image_data)
-        temp_file.write(image_bytes)
-        temp_file.close()
-        
-        # This approach has limitations and is not recommended for production
-        raise Exception(
-            "Local server hosting not implemented in this version. "
-            "Please use ImgBB or another cloud hosting service."
-        )
 
     def _submit_upscale_job(self, endpoint: str, payload: Dict[str, Any], api_key: str) -> str:
         headers = {
@@ -733,9 +436,6 @@ class UpsamplerDynamicUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
-                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"}),
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_hands": ("BOOLEAN", {"default": False}),
@@ -750,8 +450,7 @@ class UpsamplerDynamicUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, resemblance: int, 
-                detail: int, imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto",
-                description: str = "", should_enhance_faces: bool = False, 
+                detail: int, imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_hands: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
@@ -760,7 +459,7 @@ class UpsamplerDynamicUpscale:
         
         # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
         
         payload = {
             "input": {
@@ -795,9 +494,6 @@ class UpsamplerPreciseUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
-                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
-                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
@@ -809,8 +505,8 @@ class UpsamplerPreciseUpscale:
     CATEGORY = "Upsampler"
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
-                upscale_factor: float, imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto", 
-                should_enhance_faces: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
+                upscale_factor: float, imgbb_api_key: str = "", should_enhance_faces: bool = False, 
+                should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
@@ -818,7 +514,7 @@ class UpsamplerPreciseUpscale:
         
         # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
         
         payload = {
             "input": {
@@ -834,3 +530,5 @@ class UpsamplerPreciseUpscale:
         result_image = upscaler._wait_for_completion(job_id, api_key)
         
         return (upscaler._pil_to_tensor(result_image),)
+
+print("✅ ImgBB-only Upsampler nodes loaded successfully")
