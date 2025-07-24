@@ -213,7 +213,18 @@ class UpsamplerSmartUpscale:
             if image_size_mb > 30:  # Close to ImgBB limit
                 print(f"🔄 [Upload] Large image detected ({image_size_mb:.2f} MB), preferring Google Drive...")
                 if google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
-                    return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+                    try:
+                        return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+                    except Exception as e:
+                        if "Service Accounts do not have storage quota" in str(e) or "storageQuotaExceeded" in str(e):
+                            print(f"⚠️ [Upload] Google Drive service account quota exceeded, falling back to ImgBB...")
+                            if imgbb_api_key:
+                                print(f"⚠️ [Upload] Warning: Image is {image_size_mb:.2f} MB, close to ImgBB 32MB limit")
+                                return self._upload_to_imgbb(image_data, imgbb_api_key)
+                            else:
+                                raise Exception(f"Google Drive failed and no ImgBB API key provided. Large image ({image_size_mb:.2f} MB) needs ImgBB API key or working Google Drive.")
+                        else:
+                            raise  # Re-raise other Google Drive errors
                 elif imgbb_api_key:
                     print(f"⚠️ [Upload] Image is close to ImgBB 32MB limit, but no Google Drive credentials available")
                     return self._upload_to_imgbb(image_data, imgbb_api_key)
@@ -224,7 +235,14 @@ class UpsamplerSmartUpscale:
                 if imgbb_api_key:
                     return self._upload_to_imgbb(image_data, imgbb_api_key)
                 elif google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
-                    return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+                    try:
+                        return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+                    except Exception as e:
+                        if "Service Accounts do not have storage quota" in str(e) or "storageQuotaExceeded" in str(e):
+                            print(f"⚠️ [Upload] Google Drive service account quota exceeded, falling back to free services...")
+                            return self._upload_to_free_service(image_data)
+                        else:
+                            raise  # Re-raise other Google Drive errors
         
         # Fallback to free services
         try:
@@ -460,6 +478,16 @@ class UpsamplerSmartUpscale:
                     f"- Or create a new folder and share it with your service account email\n"
                     f"  (found in your JSON credentials file as 'client_email')\n"
                     f"- Then copy the folder ID from the Google Drive URL"
+                )
+            elif "Service Accounts do not have storage quota" in error_msg or "storageQuotaExceeded" in error_msg:
+                raise Exception(
+                    f"Google Drive service account storage quota exceeded.\n\n"
+                    f"Google no longer allows service accounts to upload to personal Drive accounts.\n\n"
+                    f"Solutions:\n"
+                    f"1. Use ImgBB instead: Set upload_method to 'imgbb' and add your ImgBB API key\n"
+                    f"2. Get ImgBB API key free at: https://api.imgbb.com/\n"
+                    f"3. Use Google Workspace with Shared Drives (paid)\n"
+                    f"4. Switch to 'auto' mode to fallback to ImgBB automatically"
                 )
             else:
                 raise Exception(f"Google Drive upload failed: {error_msg}")

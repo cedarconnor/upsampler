@@ -1,5 +1,7 @@
 # Google Drive Setup for ComfyUI Upsampler
 
+**⚠️ IMPORTANT NOTICE**: Google has changed their policy - service accounts can no longer upload to personal Google Drive accounts due to storage quota limitations. This setup only works with Google Workspace accounts that have Shared Drives. **For most users, ImgBB is recommended instead.**
+
 This guide explains how to set up Google Drive as an upload method for large images (>30MB) that exceed ImgBB's free limit.
 
 ## Prerequisites
