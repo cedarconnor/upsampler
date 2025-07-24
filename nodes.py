@@ -2,6 +2,7 @@ import os
 import requests
 import time
 import tempfile
+import json
 from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urlparse
 from PIL import Image
@@ -10,6 +11,14 @@ import numpy as np
 
 import folder_paths
 from comfy.utils import ProgressBar
+
+try:
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    from google.oauth2.service_account import Credentials
+    GOOGLE_DRIVE_AVAILABLE = True
+except ImportError:
+    GOOGLE_DRIVE_AVAILABLE = False
 
 
 class UpsamplerSmartUpscale:
@@ -26,6 +35,9 @@ class UpsamplerSmartUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
+                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"})
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
@@ -39,7 +51,8 @@ class UpsamplerSmartUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, detail: int,
-                imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
+                imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto",
+                description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         print(f"🚀 [Upsampler] Starting Smart Upscale process...")
@@ -54,9 +67,9 @@ class UpsamplerSmartUpscale:
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
         print(f"🔑 [Upsampler] Image hosting: {'ImgBB (with API key)' if hosting_api_key else 'Free services (no API key)'}")
         
-        # Upload image to temporary hosting service
+        # Upload image to hosting service
         print(f"📤 [Upsampler] Uploading image to hosting service...")
-        image_url = self._upload_image_temp(pil_image, hosting_api_key)
+        image_url = self._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
         print(f"✅ [Upsampler] Image uploaded successfully: {image_url}")
         
         # Prepare API request
@@ -159,21 +172,46 @@ class UpsamplerSmartUpscale:
             
         return tensor
 
-    def _upload_image_temp(self, image: Image.Image, imgbb_api_key: str = None) -> str:
+    def _upload_image_temp(self, image: Image.Image, imgbb_api_key: str = None, 
+                          google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto") -> str:
         import base64
         import io
         
-        # Convert image to base64
+        # Convert image to base64 for compatibility
         buffer = io.BytesIO()
         image.save(buffer, format='PNG')
         buffer.seek(0)
         image_data = base64.b64encode(buffer.getvalue()).decode()
+        image_size_mb = len(buffer.getvalue()) / (1024 * 1024)
         
-        # Option 1: ImgBB (Free, requires API key)
-        if imgbb_api_key:
+        print(f"📊 [Upload] Image size: {image_size_mb:.2f} MB")
+        
+        # Determine upload method
+        if upload_method == "google_drive":
+            return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+        elif upload_method == "imgbb":
+            if not imgbb_api_key:
+                raise Exception("ImgBB API key required for ImgBB upload method")
             return self._upload_to_imgbb(image_data, imgbb_api_key)
+        elif upload_method == "auto":
+            # Auto-select based on image size and available credentials
+            if image_size_mb > 30:  # Close to ImgBB limit
+                print(f"🔄 [Upload] Large image detected ({image_size_mb:.2f} MB), preferring Google Drive...")
+                if google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
+                    return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
+                elif imgbb_api_key:
+                    print(f"⚠️ [Upload] Image is close to ImgBB 32MB limit, but no Google Drive credentials available")
+                    return self._upload_to_imgbb(image_data, imgbb_api_key)
+                else:
+                    raise Exception(f"Image too large ({image_size_mb:.2f} MB) for free services. Please use Google Drive or ImgBB.")
+            else:
+                # Try ImgBB first for smaller images
+                if imgbb_api_key:
+                    return self._upload_to_imgbb(image_data, imgbb_api_key)
+                elif google_drive_creds_path and GOOGLE_DRIVE_AVAILABLE:
+                    return self._upload_to_google_drive(image, google_drive_creds_path, google_drive_folder_id)
         
-        # Option 2: Try free services without API key
+        # Fallback to free services
         try:
             return self._upload_to_free_service(image_data)
         except Exception as e:
@@ -181,10 +219,10 @@ class UpsamplerSmartUpscale:
                 f"Image upload failed: {str(e)}\n\n"
                 "To resolve this, you have several options:\n"
                 "1. Get a free ImgBB API key from https://api.imgbb.com/\n"
-                "2. Add 'imgbb_api_key' parameter to the node input\n"
-                "3. Set IMGBB_API_KEY environment variable\n"
-                "4. Use your own hosting solution\n\n"
-                "ImgBB is recommended as it's free and reliable."
+                "2. Set up Google Drive API credentials\n"
+                "3. Add 'imgbb_api_key' or 'google_drive_creds_path' parameter\n"
+                "4. Set IMGBB_API_KEY environment variable\n\n"
+                "For large images (>30MB), Google Drive is recommended."
             )
 
     def _upload_to_imgbb(self, image_data: str, api_key: str) -> str:
@@ -215,6 +253,100 @@ class UpsamplerSmartUpscale:
         else:
             print(f"❌ [ImgBB] API error: {response.status_code} - {response.text}")
             raise Exception(f"ImgBB API error: {response.status_code} - {response.text}")
+
+    def _upload_to_google_drive(self, image: Image.Image, creds_path: str, folder_id: str = "") -> str:
+        """Upload image to Google Drive and return public URL"""
+        if not GOOGLE_DRIVE_AVAILABLE:
+            raise Exception(
+                "Google Drive upload requires google-api-python-client and google-auth libraries.\n"
+                "Install with: pip install google-api-python-client google-auth"
+            )
+        
+        if not creds_path:
+            creds_path = os.getenv('GOOGLE_DRIVE_CREDS_PATH', '')
+        
+        if not creds_path or not os.path.exists(creds_path):
+            raise Exception(
+                f"Google Drive credentials file not found at: {creds_path}\n"
+                "Please provide a valid service account JSON file path.\n"
+                "See: https://developers.google.com/drive/api/v3/quickstart/python"
+            )
+        
+        print(f"🔄 [Google Drive] Authenticating with credentials: {creds_path}")
+        
+        # Use folder ID from parameter first, then environment variable
+        if not folder_id:
+            folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID', '')
+        
+        if folder_id:
+            print(f"📁 [Google Drive] Using folder ID: {folder_id}")
+        else:
+            print(f"📁 [Google Drive] No folder specified, uploading to root directory")
+        
+        try:
+            # Load service account credentials
+            creds = Credentials.from_service_account_file(
+                creds_path, 
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+            service = build('drive', 'v3', credentials=creds)
+            
+            # Save image to temp file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            image.save(temp_file.name, format='PNG')
+            temp_file.close()
+            
+            # Upload file to Google Drive
+            file_metadata = {
+                'name': f'upsampler_temp_{int(time.time())}.png'
+            }
+            
+            # Add folder as parent if specified
+            if folder_id:
+                file_metadata['parents'] = [folder_id]
+            
+            print(f"🔄 [Google Drive] Uploading image...")
+            
+            with open(temp_file.name, 'rb') as f:
+                media = MediaIoBaseUpload(f, mimetype='image/png', resumable=True)
+                file = service.files().create(
+                    body=file_metadata,
+                    media_body=media,
+                    fields='id'
+                ).execute()
+            
+            file_id = file.get('id')
+            print(f"✅ [Google Drive] File uploaded with ID: {file_id}")
+            
+            # Make file publicly viewable
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            service.permissions().create(fileId=file_id, body=permission).execute()
+            print(f"✅ [Google Drive] File made publicly accessible")
+            
+            # Clean up temp file
+            try:
+                os.unlink(temp_file.name)
+            except:
+                pass
+            
+            # Return direct download URL
+            public_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            print(f"✅ [Google Drive] Public URL: {public_url}")
+            
+            return public_url
+            
+        except Exception as e:
+            # Clean up temp file on error
+            try:
+                os.unlink(temp_file.name)
+            except:
+                pass
+            
+            print(f"❌ [Google Drive] Upload failed: {str(e)}")
+            raise Exception(f"Google Drive upload failed: {str(e)}")
 
     def _upload_to_free_service(self, image_data: str) -> str:
         """Try uploading to free services that don't require API keys"""
@@ -320,7 +452,7 @@ class UpsamplerSmartUpscale:
         }
         
         print(f"📡 [Upsampler API] Sending request to: https://upsampler.com/api/v1/{endpoint}")
-        print(f"🔑 [Upsampler API] Using API key: {api_key[:10]}...")
+        print(f"🔑 [Upsampler API] Using API key: {'*' * 8}[REDACTED]")
         
         response = requests.post(
             f"https://upsampler.com/api/v1/{endpoint}",
@@ -457,6 +589,9 @@ class UpsamplerDynamicUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
+                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"})
                 "description": ("STRING", {"multiline": True, "default": ""}),
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_hands": ("BOOLEAN", {"default": False}),
@@ -471,7 +606,8 @@ class UpsamplerDynamicUpscale:
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, resemblance: int, 
-                detail: int, imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
+                detail: int, imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto",
+                description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_hands: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
@@ -480,7 +616,7 @@ class UpsamplerDynamicUpscale:
         
         # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
         
         payload = {
             "input": {
@@ -515,6 +651,9 @@ class UpsamplerPreciseUpscale:
             },
             "optional": {
                 "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_creds_path": ("STRING", {"multiline": False, "default": ""}),
+                "google_drive_folder_id": ("STRING", {"multiline": False, "default": ""}),
+                "upload_method": (["imgbb", "google_drive", "auto"], {"default": "auto"})
                 "should_enhance_faces": ("BOOLEAN", {"default": False}),
                 "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
@@ -526,8 +665,8 @@ class UpsamplerPreciseUpscale:
     CATEGORY = "Upsampler"
 
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
-                upscale_factor: float, imgbb_api_key: str = "", should_enhance_faces: bool = False, 
-                should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
+                upscale_factor: float, imgbb_api_key: str = "", google_drive_creds_path: str = "", google_drive_folder_id: str = "", upload_method: str = "auto", 
+                should_enhance_faces: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
         
         # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
@@ -535,7 +674,7 @@ class UpsamplerPreciseUpscale:
         
         # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key, google_drive_creds_path, google_drive_folder_id, upload_method)
         
         payload = {
             "input": {
