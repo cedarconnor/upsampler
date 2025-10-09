@@ -2,7 +2,7 @@ import os
 import requests
 import time
 import tempfile
-from typing import Tuple, Optional, Dict, Any, Callable, List
+from typing import Tuple, Optional, Dict, Any
 from urllib.parse import urlparse
 from PIL import Image
 import torch
@@ -17,18 +17,18 @@ class UpsamplerSmartUpscale:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image": ("IMAGE", {"tooltip": "Input image or tile tensor to upscale (values in [0,1])."}),
-                "api_key": ("STRING", {"multiline": False, "tooltip": "Upsampler API key used to authenticate requests."}),
-                "input_image_type": (["realism", "anime", "universal"], {"tooltip": "Choose the preset that best matches the source image style."}),
-                "upscale_factor": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.1, "tooltip": "Overall scale factor applied by the Upsampler service."}),
-                "global_creativity": ("INT", {"default": 5, "min": 0, "max": 10, "tooltip": "Controls how strongly the service reimagines the image."}),
-                "detail": ("INT", {"default": 5, "min": 0, "max": 10, "tooltip": "Detail enhancement intensity for the upscaled result."}),
+                "image": ("IMAGE",),
+                "api_key": ("STRING", {"multiline": False}),
+                "input_image_type": (["realism", "anime", "universal"],),
+                "upscale_factor": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.1}),
+                "global_creativity": ("INT", {"default": 5, "min": 0, "max": 10}),
+                "detail": ("INT", {"default": 5, "min": 0, "max": 10}),
             },
             "optional": {
-                "imgbb_api_key": ("STRING", {"multiline": False, "default": "", "tooltip": "Optional ImgBB API key for authenticated temporary hosting."}),
-                "description": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional text prompt sent with the upscale request."}),
-                "should_enhance_faces": ("BOOLEAN", {"default": False, "tooltip": "Enable Upsampler face enhancement for portraits."}),
-                "should_preserve_blur": ("BOOLEAN", {"default": False, "tooltip": "Maintain natural blur instead of sharpening every region."}),
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "description": ("STRING", {"multiline": True, "default": ""}),
+                "should_enhance_faces": ("BOOLEAN", {"default": False}),
+                "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -37,24 +37,30 @@ class UpsamplerSmartUpscale:
     FUNCTION = "upscale"
     CATEGORY = "Upsampler"
 
-
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, detail: int,
                 imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
-        print(f"?? [Upsampler] Starting Smart Upscale process...")
-        print(f"?? [Upsampler] Input image shape: {image.shape}")
-        print(f"??? [Upsampler] Parameters - Type: {input_image_type}, Factor: {upscale_factor}, Creativity: {global_creativity}, Detail: {detail}")
-
-        image_batch = self._prepare_image_batch(image)
-        total_tiles = len(image_batch)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Detected batched input: {total_tiles} tiles will be processed sequentially.")
-
+        
+        print(f"🚀 [Upsampler] Starting Smart Upscale process...")
+        print(f"📏 [Upsampler] Input image shape: {image.shape}")
+        print(f"🎛️ [Upsampler] Parameters - Type: {input_image_type}, Factor: {upscale_factor}, Creativity: {global_creativity}, Detail: {detail}")
+        
+        # Convert ComfyUI image tensor to PIL Image
+        pil_image = self._tensor_to_pil(image)
+        print(f"🖼️ [Upsampler] Converted to PIL image: {pil_image.size} ({pil_image.mode})")
+        
+        # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        print(f"?? [Upsampler] Image hosting: {'ImgBB (with API key)' if hosting_api_key else 'Free services (no API key)'}")
-
-        payload_builder = lambda image_url: {
+        print(f"🔑 [Upsampler] Image hosting: {'ImgBB (with API key)' if hosting_api_key else 'Free services (no API key)'}")
+        
+        # Upload image to hosting service
+        print(f"📤 [Upsampler] Uploading image to hosting service...")
+        image_url = self._upload_image_temp(pil_image, hosting_api_key)
+        print(f"✅ [Upsampler] Image uploaded successfully: {image_url}")
+        
+        # Prepare API request
+        payload = {
             "input": {
                 "imageUrl": image_url,
                 "inputImageType": input_image_type,
@@ -66,92 +72,28 @@ class UpsamplerSmartUpscale:
                 "shouldPreserveBlur": should_preserve_blur
             }
         }
-
-        outputs: List[torch.Tensor] = []
-        for idx, tile in enumerate(image_batch, start=1):
-            outputs.append(
-                self._upscale_single_image(
-                    tile,
-                    api_key=api_key,
-                    hosting_api_key=hosting_api_key,
-                    payload_builder=payload_builder,
-                    job_type="smart-upscale",
-                    tile_index=idx,
-                    total_tiles=total_tiles,
-                )
-            )
-
-        result_tensor = torch.cat(outputs, dim=0)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Batched upscaling complete. Combined tensor shape: {result_tensor.shape}")
-
-        print(f"? [Upsampler] Smart Upscale process completed successfully!")
-        return (result_tensor,)
-
-    def _prepare_image_batch(self, image: torch.Tensor) -> List[torch.Tensor]:
-        if image.ndim == 3:
-            return [image.unsqueeze(0)]
-        if image.ndim == 4:
-            return [image[i:i + 1] for i in range(image.shape[0])]
-        raise ValueError(f"Unsupported image tensor shape: {image.shape}")
-
-    def _upscale_single_image(
-        self,
-        tile: torch.Tensor,
-        *,
-        api_key: str,
-        hosting_api_key: str,
-        payload_builder: Callable[[str], Dict[str, Any]],
-        job_type: str,
-        tile_index: int,
-        total_tiles: int,
-    ) -> torch.Tensor:
-        tile_label = f"{tile_index}/{total_tiles}" if total_tiles > 1 else "1/1"
-
-        pil_image = self._tensor_to_pil(tile)
-        if total_tiles > 1:
-            print(f"??? [Upsampler] Tile {tile_label}: Converted to PIL image: {pil_image.size} ({pil_image.mode})")
-        else:
-            print(f"??? [Upsampler] Converted to PIL image: {pil_image.size} ({pil_image.mode})")
-
-        print(f"?? [Upsampler] Tile {tile_label}: Uploading image to hosting service...")
-        image_url = self._upload_image_temp(pil_image, hosting_api_key)
-        print(f"? [Upsampler] Tile {tile_label}: Image uploaded successfully: {image_url}")
-
-        payload = payload_builder(image_url)
-
-        self._ensure_within_api_limits(tile, tile_label, payload)
-
-        print(f"?? [Upsampler] Tile {tile_label}: Submitting job to Upsampler API...")
-        job_id = self._submit_upscale_job(job_type, payload, api_key)
-        print(f"? [Upsampler] Tile {tile_label}: Job submitted successfully! Job ID: {job_id}")
-
-        print(f"? [Upsampler] Tile {tile_label}: Waiting for upscaling to complete...")
+        
+        # Submit upscaling job
+        print(f"🚀 [Upsampler] Submitting job to Upsampler API...")
+        job_id = self._submit_upscale_job("smart-upscale", payload, api_key)
+        print(f"✅ [Upsampler] Job submitted successfully! Job ID: {job_id}")
+        
+        # Poll for completion
+        print(f"⏳ [Upsampler] Waiting for upscaling to complete...")
         result_image = self._wait_for_completion(job_id, api_key)
-        print(f"?? [Upsampler] Tile {tile_label}: Upscaling completed! Result image: {result_image.size} ({result_image.mode})")
-
+        print(f"🎉 [Upsampler] Upscaling completed! Result image: {result_image.size} ({result_image.mode})")
+        
+        # Convert back to ComfyUI tensor format
         result_tensor = self._pil_to_tensor(result_image)
-        print(f"?? [Upsampler] Tile {tile_label}: Final tensor shape: {result_tensor.shape}")
-
+        print(f"📤 [Upsampler] Final tensor shape: {result_tensor.shape}")
+        
+        # Final validation
         self._validate_output(result_tensor, result_image)
-
-        return result_tensor
-
-    def _ensure_within_api_limits(self, tile: torch.Tensor, tile_label: str, payload: Dict[str, Any]):
-        upscale_factor = float(payload.get("input", {}).get("upscaleFactor", 1.0))
-        tile_height = tile.shape[1]
-        tile_width = tile.shape[2]
-        projected_pixels = tile_height * tile_width * (upscale_factor ** 2)
-        max_pixels = 50_000_000
-
-        if projected_pixels > max_pixels:
-            limit_factor = (max_pixels / (tile_height * tile_width)) ** 0.5
-            message = (
-                f"Tile {tile_label} would produce {projected_pixels:.0f} pixels, exceeding the 50M limit. "
-                f"Reduce the upscale factor to <= {limit_factor:.2f} or use smaller tiles."
-            )
-            raise Exception(message)
-
+        
+        print(f"✨ [Upsampler] Smart Upscale process completed successfully!")
+        
+        return (result_tensor,)
+    
     def _validate_output(self, tensor: torch.Tensor, image: Image.Image):
         """Validate the final output before returning"""
         print(f"🔍 [Final Validation] Starting output validation...")
@@ -240,10 +182,7 @@ class UpsamplerSmartUpscale:
         
         # Use ImgBB if API key provided
         if imgbb_api_key:
-            try:
-                return self._upload_to_imgbb(image_data, imgbb_api_key)
-            except Exception as exc:
-                print(f"?? [ImgBB] Upload failed ({exc}). Falling back to free services...")
+            return self._upload_to_imgbb(image_data, imgbb_api_key)
         
         # Try free services without API key
         try:
@@ -264,19 +203,14 @@ class UpsamplerSmartUpscale:
         """Upload image to ImgBB service"""
         print(f"🔄 [ImgBB] Uploading to ImgBB (expires in 1 hour)...")
         
-        try:
-            response = requests.post(
-                "https://api.imgbb.com/1/upload",
-                data={
-                    "key": api_key,
-                    "image": image_data,
-                    "expiration": 3600  # 1 hour expiration
-                },
-                timeout=30
-            )
-        except requests.exceptions.RequestException as exc:
-            print(f"? [ImgBB] Request error: {exc}")
-            raise Exception(f"ImgBB request failed: {exc}")
+        response = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={
+                "key": api_key,
+                "image": image_data,
+                "expiration": 3600  # 1 hour expiration
+            }
+        )
         
         print(f"📡 [ImgBB] Response status: {response.status_code}")
         
@@ -538,20 +472,20 @@ class UpsamplerDynamicUpscale:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image": ("IMAGE", {"tooltip": "Input image or tile tensor to upscale (values in [0,1])."}),
-                "api_key": ("STRING", {"multiline": False, "tooltip": "Upsampler API key used to authenticate requests."}),
-                "input_image_type": (["realism", "anime", "universal"], {"tooltip": "Choose the preset that best matches the source image style."}),
-                "upscale_factor": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.1, "tooltip": "Overall scale factor applied by the Upsampler service."}),
-                "global_creativity": ("INT", {"default": 5, "min": 0, "max": 10, "tooltip": "Controls how strongly the service reimagines the image."}),
-                "resemblance": ("INT", {"default": 8, "min": 0, "max": 10, "tooltip": "Adjust how closely the output should match the input."}),
-                "detail": ("INT", {"default": 5, "min": 0, "max": 10, "tooltip": "Detail enhancement intensity for the upscaled result."}),
+                "image": ("IMAGE",),
+                "api_key": ("STRING", {"multiline": False}),
+                "input_image_type": (["realism", "anime", "universal"],),
+                "upscale_factor": ("FLOAT", {"default": 2.0, "min": 1.0, "max": 4.0, "step": 0.1}),
+                "global_creativity": ("INT", {"default": 5, "min": 0, "max": 10}),
+                "resemblance": ("INT", {"default": 8, "min": 0, "max": 10}),
+                "detail": ("INT", {"default": 5, "min": 0, "max": 10}),
             },
             "optional": {
-                "imgbb_api_key": ("STRING", {"multiline": False, "default": "", "tooltip": "Optional ImgBB API key for authenticated temporary hosting."}),
-                "description": ("STRING", {"multiline": True, "default": "", "tooltip": "Optional text prompt sent with the upscale request."}),
-                "should_enhance_faces": ("BOOLEAN", {"default": False, "tooltip": "Enable Upsampler face enhancement for portraits."}),
-                "should_preserve_hands": ("BOOLEAN", {"default": False, "tooltip": "Try to maintain accurate hand details when present."}),
-                "should_preserve_blur": ("BOOLEAN", {"default": False, "tooltip": "Maintain natural blur instead of sharpening every region."}),
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "description": ("STRING", {"multiline": True, "default": ""}),
+                "should_enhance_faces": ("BOOLEAN", {"default": False}),
+                "should_preserve_hands": ("BOOLEAN", {"default": False}),
+                "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -560,21 +494,20 @@ class UpsamplerDynamicUpscale:
     FUNCTION = "upscale"
     CATEGORY = "Upsampler"
 
-
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, global_creativity: int, resemblance: int, 
                 detail: int, imgbb_api_key: str = "", description: str = "", should_enhance_faces: bool = False, 
                 should_preserve_hands: bool = False, should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
+        
+        # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
-        image_batch = upscaler._prepare_image_batch(image)
-        total_tiles = len(image_batch)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Detected batched input: {total_tiles} tiles will be processed sequentially.")
-
+        pil_image = upscaler._tensor_to_pil(image)
+        
+        # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        print(f"?? [Upsampler] Image hosting: {'ImgBB (with API key)' if hosting_api_key else 'Free services (no API key)'}")
-
-        payload_builder = lambda image_url: {
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
+        
+        payload = {
             "input": {
                 "imageUrl": image_url,
                 "inputImageType": input_image_type,
@@ -588,40 +521,27 @@ class UpsamplerDynamicUpscale:
                 "shouldPreserveBlur": should_preserve_blur
             }
         }
+        
+        job_id = upscaler._submit_upscale_job("dynamic-upscale", payload, api_key)
+        result_image = upscaler._wait_for_completion(job_id, api_key)
+        
+        return (upscaler._pil_to_tensor(result_image),)
 
-        outputs: List[torch.Tensor] = []
-        for idx, tile in enumerate(image_batch, start=1):
-            outputs.append(
-                upscaler._upscale_single_image(
-                    tile,
-                    api_key=api_key,
-                    hosting_api_key=hosting_api_key,
-                    payload_builder=payload_builder,
-                    job_type="dynamic-upscale",
-                    tile_index=idx,
-                    total_tiles=total_tiles,
-                )
-            )
-
-        result_tensor = torch.cat(outputs, dim=0)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Dynamic upscaling batch complete. Combined tensor shape: {result_tensor.shape}")
-        return (result_tensor,)
 
 class UpsamplerPreciseUpscale:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image": ("IMAGE", {"tooltip": "Input image or tile tensor to upscale (values in [0,1])."}),
-                "api_key": ("STRING", {"multiline": False, "tooltip": "Upsampler API key used to authenticate requests."}),
-                "input_image_type": (["realism", "anime", "universal"], {"tooltip": "Choose the preset that best matches the source image style."}),
-                "upscale_factor": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 16.0, "step": 0.1, "tooltip": "Overall scale factor applied by the Upsampler service."}),
+                "image": ("IMAGE",),
+                "api_key": ("STRING", {"multiline": False}),
+                "input_image_type": (["realism", "anime", "universal"],),
+                "upscale_factor": ("FLOAT", {"default": 4.0, "min": 1.0, "max": 16.0, "step": 0.1}),
             },
             "optional": {
-                "imgbb_api_key": ("STRING", {"multiline": False, "default": "", "tooltip": "Optional ImgBB API key for authenticated temporary hosting."}),
-                "should_enhance_faces": ("BOOLEAN", {"default": False, "tooltip": "Enable Upsampler face enhancement for portraits."}),
-                "should_preserve_blur": ("BOOLEAN", {"default": False, "tooltip": "Maintain natural blur instead of sharpening every region."}),
+                "imgbb_api_key": ("STRING", {"multiline": False, "default": ""}),
+                "should_enhance_faces": ("BOOLEAN", {"default": False}),
+                "should_preserve_blur": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -630,20 +550,19 @@ class UpsamplerPreciseUpscale:
     FUNCTION = "upscale"
     CATEGORY = "Upsampler"
 
-
     def upscale(self, image: torch.Tensor, api_key: str, input_image_type: str, 
                 upscale_factor: float, imgbb_api_key: str = "", should_enhance_faces: bool = False, 
                 should_preserve_blur: bool = False) -> Tuple[torch.Tensor]:
+        
+        # Reuse the same methods from SmartUpscale
         upscaler = UpsamplerSmartUpscale()
-        image_batch = upscaler._prepare_image_batch(image)
-        total_tiles = len(image_batch)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Detected batched input: {total_tiles} tiles will be processed sequentially.")
-
+        pil_image = upscaler._tensor_to_pil(image)
+        
+        # Get ImgBB API key from parameter or environment variable
         hosting_api_key = imgbb_api_key or os.getenv('IMGBB_API_KEY', '')
-        print(f"?? [Upsampler] Image hosting: {'ImgBB (with API key)' if hosting_api_key else 'Free services (no API key)'}")
-
-        payload_builder = lambda image_url: {
+        image_url = upscaler._upload_image_temp(pil_image, hosting_api_key)
+        
+        payload = {
             "input": {
                 "imageUrl": image_url,
                 "inputImageType": input_image_type,
@@ -652,24 +571,10 @@ class UpsamplerPreciseUpscale:
                 "shouldPreserveBlur": should_preserve_blur
             }
         }
-
-        outputs: List[torch.Tensor] = []
-        for idx, tile in enumerate(image_batch, start=1):
-            outputs.append(
-                upscaler._upscale_single_image(
-                    tile,
-                    api_key=api_key,
-                    hosting_api_key=hosting_api_key,
-                    payload_builder=payload_builder,
-                    job_type="precise-upscale",
-                    tile_index=idx,
-                    total_tiles=total_tiles,
-                )
-            )
-
-        result_tensor = torch.cat(outputs, dim=0)
-        if total_tiles > 1:
-            print(f"?? [Upsampler] Precise upscaling batch complete. Combined tensor shape: {result_tensor.shape}")
-        return (result_tensor,)
+        
+        job_id = upscaler._submit_upscale_job("precise-upscale", payload, api_key)
+        result_image = upscaler._wait_for_completion(job_id, api_key)
+        
+        return (upscaler._pil_to_tensor(result_image),)
 
 print("✅ ImgBB-only Upsampler nodes loaded successfully")
