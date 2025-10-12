@@ -82,6 +82,7 @@ For production use, implement your own hosting solution by modifying the `_uploa
    - **ImgBB API Key** (optional): Your ImgBB API key for reliable image hosting
    - **Input Image Type**: Choose "realism", "anime", or "universal"
    - **Upscale Factor**: How much to upscale (1.0-4.0 for Smart/Dynamic, 1.0-16.0 for Precise)
+   - **Max Parallel Jobs**: How many tiles to submit simultaneously (1-15). Leave at 1 for sequential processing.
    - Additional parameters specific to each method
 
 4. The node will:
@@ -99,6 +100,7 @@ For production use, implement your own hosting solution by modifying the `_uploa
 - `description`: Text prompt to guide the upscaling process
 - `should_enhance_faces`: Better preserve and enhance facial features
 - `should_preserve_blur`: Preserve existing blur in the image
+- `max_parallel_jobs` (1-15): Tiles submitted in parallel; higher values finish sooner but must stay within Upsampler rate and queue limits
 
 ### Dynamic Upscale  
 - `imgbb_api_key`: ImgBB API key for reliable image hosting (optional)
@@ -109,11 +111,21 @@ For production use, implement your own hosting solution by modifying the `_uploa
 - `should_enhance_faces`: Better preserve and enhance facial features
 - `should_preserve_hands`: Better preserve hand structures
 - `should_preserve_blur`: Preserve existing blur in the image
+- `max_parallel_jobs` (1-15): Tiles submitted in parallel; honours `UPSAMPLER_MAX_CONCURRENCY` and API queue limits
 
 ### Precise Upscale
 - `imgbb_api_key`: ImgBB API key for reliable image hosting (optional)
 - `should_enhance_faces`: Apply face restoration techniques
 - `should_preserve_blur`: Preserve existing blur in the image
+- `max_parallel_jobs` (1-15): Tiles submitted in parallel; honours `UPSAMPLER_MAX_CONCURRENCY` and API queue limits
+
+## Advanced Configuration
+
+- `UPSAMPLER_MAX_CONCURRENCY`: Optional environment override for the concurrency cap (default comes from each node's `max_parallel_jobs`, clamped to 1-15).
+- `UPSAMPLER_MAX_RETRIES`: Additional attempts after the initial Upsampler failure when the error is retryable (default: 2).
+- `UPSAMPLER_RETRY_DELAY`: Seconds to wait before retrying a failed tile (default: 10).
+
+These variables apply across every Upsampler node in a workflow and complement the per-node `max_parallel_jobs` control. Increase them gradually to stay within Upsampler's published rate and queue limits (90 POSTs/minute, 6000/hour; 240 status checks/minute).
 
 ## Pricing
 
@@ -138,8 +150,8 @@ Credits are consumed based on output image size:
    - Verify account status at https://upsampler.com/
 
 4. **Rate limit errors**: 
-   - The API has limits of 60 requests/minute and 1800 requests/hour
-   - Wait before retrying
+   - The API currently allows up to 90 requests/minute (6000/hour) for upscale endpoints and 240 requests/minute for status checks
+   - High `max_parallel_jobs` values can hit these limits quickly; wait before retrying or lower concurrency
 
 5. **Job failures**: 
    - Check the error message for specific issues
