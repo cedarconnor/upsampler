@@ -8,7 +8,7 @@ from PIL import Image
 import torch
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+import random
 import folder_paths
 from comfy.utils import ProgressBar
 
@@ -185,10 +185,13 @@ class UpsamplerSmartUpscale:
                 print(f"? [Upsampler] Tile {tile_label}: Attempt {attempt_label} failed: {exc}")
                 if retryable:
                     if retry_delay:
+                        # Add jitter to prevent simultaneous retries (thundering herd)
+                        jitter = random.uniform(1.0, 5.0)
+                        actual_delay = retry_delay + jitter
                         print(
-                            f"?? [Upsampler] Tile {tile_label}: Waiting {retry_delay:.0f} seconds before retrying..."
+                            f"?? [Upsampler] Tile {tile_label}: Waiting {actual_delay:.1f} seconds (inc. jitter) before retrying..."
                         )
-                        time.sleep(retry_delay)
+                        time.sleep(actual_delay)
                     continue
                 raise
 
@@ -585,7 +588,8 @@ class UpsamplerSmartUpscale:
 
         if response.status_code != 200:
             print(f"? [Upsampler API] Request failed: {response.status_code} - {response.text}")
-            retryable = response.status_code >= 500
+            # Treat 429 (Too Many Requests) as retryable
+            retryable = response.status_code >= 500 or response.status_code == 429
             raise UpsamplerJobError(
                 f"API request failed: {response.status_code} - {response.text}",
                 retryable=retryable,
